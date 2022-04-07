@@ -24,7 +24,6 @@ type CloudwatchCore struct {
 	Options           *cloudwatchlogs.Options
 	nextSequenceToken *string
 	svc               *cloudwatchlogs.Client
-	Async             bool // if async is true, send a message asynchronously.
 	m                 sync.Mutex
 
 	zapcore.LevelEnabler
@@ -35,7 +34,6 @@ type CloudwatchCore struct {
 type NewCloudwatchCoreParams struct {
 	GroupName    string
 	StreamName   string
-	IsAsync      bool
 	AWSRegion    string
 	AWSAccessKey string
 	AWSSecretKey string
@@ -59,7 +57,6 @@ func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
 		GroupName:      params.GroupName,
 		StreamName:     params.StreamName,
 		Options:        &options,
-		Async:          params.IsAsync,
 		AcceptedLevels: LevelThreshold(params.Level),
 		LevelEnabler:   params.LevelEnabler,
 		enc:            params.Enc,
@@ -85,7 +82,6 @@ func (c *CloudwatchCore) clone() *CloudwatchCore {
 		GroupName:      c.GroupName,
 		StreamName:     c.StreamName,
 		Options:        c.Options,
-		Async:          c.Async,
 		AcceptedLevels: c.AcceptedLevels,
 		LevelEnabler:   c.LevelEnabler,
 		enc:            c.enc.Clone(),
@@ -139,11 +135,6 @@ func (c *CloudwatchCore) cloudwatchWriter(e zapcore.Entry, msg string) error {
 		LogGroupName:  aws.String(c.GroupName),
 		LogStreamName: aws.String(c.StreamName),
 		SequenceToken: c.nextSequenceToken,
-	}
-
-	if c.Async {
-		go c.sendEvent(params)
-		return nil
 	}
 
 	return c.sendEvent(params)

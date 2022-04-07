@@ -23,7 +23,6 @@ func getCloudwatchCore() (*zapcore.Core, error) {
 	cloudWatchParams := zcw.NewCloudwatchCoreParams{
 		GroupName:    "test",
 		StreamName:   "stream",
-		IsAsync:      false,
 		AWSRegion:    os.Getenv("AWS_REGION"),
 		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY"),
 		AWSSecretKey: os.Getenv("AWS_SECRET_KEY"),

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"go.uber.org/zap/zapcore"
@@ -33,7 +34,10 @@ type NewCloudwatchCoreParams struct {
 	GroupName    string
 	StreamName   string
 	IsAsync      bool
-	Config       *aws.Config
+	AWSRegion    string
+	AWSAccessKey string
+	AWSSecretKey string
+	AWSToken     string
 	Level        zapcore.Level
 	Enc          zapcore.Encoder
 	Out          zapcore.WriteSyncer
@@ -41,10 +45,17 @@ type NewCloudwatchCoreParams struct {
 }
 
 func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
+	cred := credentials.NewStaticCredentials(
+		params.AWSAccessKey,
+		params.AWSSecretKey,
+		params.AWSToken,
+	)
+	awsCfg := aws.NewConfig().WithRegion(params.AWSRegion).WithCredentials(cred)
+
 	core := &CloudwatchCore{
 		GroupName:      params.GroupName,
 		StreamName:     params.StreamName,
-		AWSConfig:      params.Config,
+		AWSConfig:      awsCfg,
 		Async:          params.IsAsync,
 		AcceptedLevels: LevelThreshold(params.Level),
 		LevelEnabler:   params.LevelEnabler,

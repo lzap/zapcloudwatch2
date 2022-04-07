@@ -7,8 +7,6 @@ import (
 
 	"github.com/vmlellis/zapcloudwatchcore"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -21,18 +19,15 @@ func getConsoleCore() zapcore.Core {
 }
 
 func getCloudwatchCore() (*zapcore.Core, error) {
-	cred := credentials.NewStaticCredentials(
-		os.Getenv("AWS_ACCESS_KEY"),
-		os.Getenv("AWS_SECRET_KEY"),
-		os.Getenv("AWS_TOKEN"),
-	)
-	awsCfg := aws.NewConfig().WithRegion(os.Getenv("AWS_REGION")).WithCredentials(cred)
 
 	cloudWatchParams := zapcloudwatchcore.NewCloudwatchCoreParams{
 		GroupName:    "test",
 		StreamName:   "stream",
 		IsAsync:      false,
-		Config:       awsCfg,
+		AWSRegion:    os.Getenv("AWS_REGION"),
+		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY"),
+		AWSSecretKey: os.Getenv("AWS_SECRET_KEY"),
+		AWSToken:     os.Getenv("AWS_TOKEN"),
 		Level:        zapcore.InfoLevel,
 		LevelEnabler: zap.NewAtomicLevelAt(zapcore.InfoLevel),
 		Enc:          zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),

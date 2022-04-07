@@ -1,14 +1,16 @@
 package zapcloudwatchcore
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
+
 	"go.uber.org/zap/zapcore"
 )
 
@@ -19,9 +21,9 @@ type CloudwatchCore struct {
 	AcceptedLevels    []zapcore.Level
 	GroupName         string
 	StreamName        string
-	AWSConfig         *aws.Config
+	Options           *cloudwatchlogs.Options
 	nextSequenceToken *string
-	svc               *cloudwatchlogs.CloudWatchLogs
+	svc               *cloudwatchlogs.Client
 	Async             bool // if async is true, send a message asynchronously.
 	m                 sync.Mutex
 
@@ -45,17 +47,18 @@ type NewCloudwatchCoreParams struct {
 }
 
 func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
-	cred := credentials.NewStaticCredentials(
-		params.AWSAccessKey,
-		params.AWSSecretKey,
-		params.AWSToken,
-	)
-	awsCfg := aws.NewConfig().WithRegion(params.AWSRegion).WithCredentials(cred)
+	options := cloudwatchlogs.Options{
+		Region: params.AWSRegion,
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			params.AWSAccessKey,
+			params.AWSSecretKey,
+			params.AWSToken)),
+	}
 
 	core := &CloudwatchCore{
 		GroupName:      params.GroupName,
 		StreamName:     params.StreamName,
-		AWSConfig:      awsCfg,
+		Options:        &options,
 		Async:          params.IsAsync,
 		AcceptedLevels: LevelThreshold(params.Level),
 		LevelEnabler:   params.LevelEnabler,
@@ -81,7 +84,7 @@ func (c *CloudwatchCore) clone() *CloudwatchCore {
 	return &CloudwatchCore{
 		GroupName:      c.GroupName,
 		StreamName:     c.StreamName,
-		AWSConfig:      c.AWSConfig,
+		Options:        c.Options,
 		Async:          c.Async,
 		AcceptedLevels: c.AcceptedLevels,
 		LevelEnabler:   c.LevelEnabler,
@@ -133,12 +136,12 @@ func (c *CloudwatchCore) cloudwatchWriter(e zapcore.Entry, msg string) error {
 		return nil
 	}
 
-	event := &cloudwatchlogs.InputLogEvent{
+	event := types.InputLogEvent{
 		Message:   aws.String(fmt.Sprintf("%s", msg)),
 		Timestamp: aws.Int64(int64(time.Nanosecond) * time.Now().UnixNano() / int64(time.Millisecond)),
 	}
 	params := &cloudwatchlogs.PutLogEventsInput{
-		LogEvents:     []*cloudwatchlogs.InputLogEvent{event},
+		LogEvents:     []types.InputLogEvent{event},
 		LogGroupName:  aws.String(c.GroupName),
 		LogStreamName: aws.String(c.StreamName),
 		SequenceToken: c.nextSequenceToken,
@@ -154,22 +157,22 @@ func (c *CloudwatchCore) cloudwatchWriter(e zapcore.Entry, msg string) error {
 
 // GetHook function returns hook to zap
 func (c *CloudwatchCore) cloudWatchInit() error {
-	c.svc = cloudwatchlogs.New(session.New(c.AWSConfig))
+	c.svc = cloudwatchlogs.New(*c.Options)
 
-	lgresp, err := c.svc.DescribeLogGroups(&cloudwatchlogs.DescribeLogGroupsInput{LogGroupNamePrefix: aws.String(c.GroupName), Limit: aws.Int64(1)})
+	lgresp, err := c.svc.DescribeLogGroups(context.TODO(), &cloudwatchlogs.DescribeLogGroupsInput{LogGroupNamePrefix: aws.String(c.GroupName), Limit: aws.Int32(1)})
 	if err != nil {
 		return err
 	}
 
 	if len(lgresp.LogGroups) < 1 {
 		// we need to create this log group
-		_, err := c.svc.CreateLogGroup(&cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String(c.GroupName)})
+		_, err := c.svc.CreateLogGroup(context.TODO(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String(c.GroupName)})
 		if err != nil {
 			return err
 		}
 	}
 
-	resp, err := c.svc.DescribeLogStreams(&cloudwatchlogs.DescribeLogStreamsInput{
+	resp, err := c.svc.DescribeLogStreams(context.TODO(), &cloudwatchlogs.DescribeLogStreamsInput{
 		LogGroupName:        aws.String(c.GroupName), // Required
 		LogStreamNamePrefix: aws.String(c.StreamName),
 	})
@@ -184,7 +187,7 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 	}
 
 	// create stream if it doesn't exist. the next sequence token will be null
-	_, err = c.svc.CreateLogStream(&cloudwatchlogs.CreateLogStreamInput{
+	_, err = c.svc.CreateLogStream(context.TODO(), &cloudwatchlogs.CreateLogStreamInput{
 		LogGroupName:  aws.String(c.GroupName),
 		LogStreamName: aws.String(c.StreamName),
 	})
@@ -199,7 +202,7 @@ func (c *CloudwatchCore) sendEvent(params *cloudwatchlogs.PutLogEventsInput) err
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	resp, err := c.svc.PutLogEvents(params)
+	resp, err := c.svc.PutLogEvents(context.TODO(), params)
 	if err != nil {
 		return err
 	}

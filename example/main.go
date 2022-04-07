@@ -60,6 +60,10 @@ func getLogger(name string) *zap.Logger {
 func main() {
 	logger := getLogger("test")
 
+	// It is very important to sync at the program exit since messages
+	// are sent in batches.
+	defer logger.Sync()
+
 	logger.Debug("don't need to send a message")
 	logger.Error("an error happened!")
 }

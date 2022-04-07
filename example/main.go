@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/vmlellis/zapcloudwatchcore"
+	zcw "github.com/lzap/zapcloudwatch2"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -20,7 +20,7 @@ func getConsoleCore() zapcore.Core {
 
 func getCloudwatchCore() (*zapcore.Core, error) {
 
-	cloudWatchParams := zapcloudwatchcore.NewCloudwatchCoreParams{
+	cloudWatchParams := zcw.NewCloudwatchCoreParams{
 		GroupName:    "test",
 		StreamName:   "stream",
 		IsAsync:      false,
@@ -34,7 +34,7 @@ func getCloudwatchCore() (*zapcore.Core, error) {
 		Out:          zapcore.AddSync(ioutil.Discard),
 	}
 
-	core, err := zapcloudwatchcore.NewCloudwatchCore(&cloudWatchParams)
+	core, err := zcw.NewCloudwatchCore(&cloudWatchParams)
 	if err != nil {
 		log.Printf("can't initialize cloudwatch logger: %v", err)
 		return nil, err

@@ -1,4 +1,4 @@
-module github.com/vmlellis/zapcloudwatchcore
+module github.com/lzap/zapcloudwatch2
 
 go 1.18
 

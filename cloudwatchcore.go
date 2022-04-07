@@ -1,4 +1,4 @@
-package zapcloudwatchcore
+package zapcloudwatch2
 
 import (
 	"context"

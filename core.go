@@ -22,9 +22,13 @@ type CloudwatchCore struct {
 	GroupName         string
 	StreamName        string
 	Options           *cloudwatchlogs.Options
+	BatchFrequency    time.Duration
 	nextSequenceToken *string
 	svc               *cloudwatchlogs.Client
 	m                 sync.Mutex
+	ch                chan *types.InputLogEvent
+	flush             chan bool
+	err               *error
 
 	zapcore.LevelEnabler
 	enc zapcore.Encoder
@@ -61,6 +65,8 @@ func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
 		LevelEnabler:   params.LevelEnabler,
 		enc:            params.Enc,
 		out:            params.Out,
+		ch:             make(chan *types.InputLogEvent, 10000),
+		flush:          make(chan bool),
 	}
 
 	err := core.cloudWatchInit()
@@ -79,11 +85,14 @@ func (c *CloudwatchCore) With(fields []zapcore.Field) zapcore.Core {
 
 func (c *CloudwatchCore) clone() *CloudwatchCore {
 	return &CloudwatchCore{
+		AcceptedLevels: c.AcceptedLevels,
 		GroupName:      c.GroupName,
 		StreamName:     c.StreamName,
 		Options:        c.Options,
-		AcceptedLevels: c.AcceptedLevels,
+		BatchFrequency: c.BatchFrequency,
 		LevelEnabler:   c.LevelEnabler,
+		ch:             make(chan *types.InputLogEvent, 10000),
+		flush:          make(chan bool),
 		enc:            c.enc.Clone(),
 		out:            c.out,
 	}
@@ -103,41 +112,37 @@ func (c *CloudwatchCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zap
 }
 
 func (c *CloudwatchCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
+	if !c.isAcceptedLevel(ent.Level) {
+		return nil
+	}
+
 	buf, err := c.enc.EncodeEntry(ent, fields)
 	if err != nil {
 		return err
 	}
-	err = c.cloudwatchWriter(ent, buf.String())
-	buf.Free()
+	defer buf.Free()
 
-	if err != nil {
-		return err
+	event := types.InputLogEvent{
+		Message:   aws.String(buf.String()),
+		Timestamp: aws.Int64(int64(time.Nanosecond) * time.Now().UnixNano() / int64(time.Millisecond)),
+	}
+
+	c.ch <- &event
+	if c.err != nil {
+		lastErr := c.err
+		c.err = nil
+		return fmt.Errorf("%v", lastErr)
 	}
 
 	return nil
 }
 
 func (c *CloudwatchCore) Sync() error {
-	return c.out.Sync()
-}
-
-func (c *CloudwatchCore) cloudwatchWriter(e zapcore.Entry, msg string) error {
-	if !c.isAcceptedLevel(e.Level) {
-		return nil
+	c.flush <- true
+	if c.err != nil {
+		return *c.err
 	}
-
-	event := types.InputLogEvent{
-		Message:   aws.String(fmt.Sprintf("%s", msg)),
-		Timestamp: aws.Int64(int64(time.Nanosecond) * time.Now().UnixNano() / int64(time.Millisecond)),
-	}
-	params := &cloudwatchlogs.PutLogEventsInput{
-		LogEvents:     []types.InputLogEvent{event},
-		LogGroupName:  aws.String(c.GroupName),
-		LogStreamName: aws.String(c.StreamName),
-		SequenceToken: c.nextSequenceToken,
-	}
-
-	return c.sendEvent(params)
+	return nil
 }
 
 // GetHook function returns hook to zap
@@ -165,13 +170,11 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 		return err
 	}
 
-	// grab the next sequence token
 	if len(resp.LogStreams) > 0 {
 		c.nextSequenceToken = resp.LogStreams[0].UploadSequenceToken
 		return nil
 	}
 
-	// create stream if it doesn't exist. the next sequence token will be null
 	_, err = c.svc.CreateLogStream(context.TODO(), &cloudwatchlogs.CreateLogStreamInput{
 		LogGroupName:  aws.String(c.GroupName),
 		LogStreamName: aws.String(c.StreamName),
@@ -180,19 +183,69 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 	if err != nil {
 		return err
 	}
+
+	// Limits: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html
+	if c.BatchFrequency == 0 || c.BatchFrequency < 200*time.Millisecond {
+		c.BatchFrequency = 5 * time.Second
+	}
+	ticker := time.NewTicker(c.BatchFrequency)
+	go c.processBatches(c.flush, ticker.C)
+
 	return nil
 }
 
-func (c *CloudwatchCore) sendEvent(params *cloudwatchlogs.PutLogEventsInput) error {
+func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Time) {
+	var batch []types.InputLogEvent
+	size := 0
+	for {
+		select {
+		case p := <-c.ch:
+			// Limits: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html
+			messageSize := len(*p.Message) + 26
+			if size+messageSize >= 1_048_576 || len(batch) == 10000 {
+				go c.sendBatch(batch)
+				batch = nil
+				size = 0
+			}
+			batch = append(batch, *p)
+			size += messageSize
+		case <-flush:
+			go c.sendBatch(batch)
+			batch = nil
+			size = 0
+		case <-ticker:
+			go c.sendBatch(batch)
+			batch = nil
+			size = 0
+		}
+	}
+}
+
+func (c *CloudwatchCore) sendBatch(batch []types.InputLogEvent) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	resp, err := c.svc.PutLogEvents(context.TODO(), params)
-	if err != nil {
-		return err
+	if len(batch) == 0 {
+		return
 	}
-	c.nextSequenceToken = resp.NextSequenceToken
-	return nil
+	params := &cloudwatchlogs.PutLogEventsInput{
+		LogEvents:     batch,
+		LogGroupName:  aws.String(c.GroupName),
+		LogStreamName: aws.String(c.StreamName),
+		SequenceToken: c.nextSequenceToken,
+	}
+	resp, err := c.svc.PutLogEvents(context.TODO(), params)
+	if err == nil {
+		c.nextSequenceToken = resp.NextSequenceToken
+		return
+	}
+
+	c.err = &err
+	if aerr, ok := err.(*types.InvalidSequenceTokenException); ok {
+		c.nextSequenceToken = aerr.ExpectedSequenceToken
+		c.sendBatch(batch)
+		return
+	}
 }
 
 // Levels sets which levels to sent to cloudwatch

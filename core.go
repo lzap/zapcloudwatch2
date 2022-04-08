@@ -186,7 +186,7 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 	c.ch = make(chan *types.InputLogEvent, 10000)
 	c.flush = make(chan bool)
 	if c.BatchFrequency == 0 || c.BatchFrequency < 200*time.Millisecond {
-		c.BatchFrequency = 5 * time.Second
+		c.BatchFrequency = 2 * time.Second
 	}
 	ticker := time.NewTicker(c.BatchFrequency)
 	go c.processBatches(c.flush, ticker.C)

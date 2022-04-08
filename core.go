@@ -28,6 +28,7 @@ type CloudwatchCore struct {
 	m                 sync.Mutex
 	ch                chan *types.InputLogEvent
 	flush             chan bool
+	flushWG           sync.WaitGroup
 	err               *error
 
 	zapcore.LevelEnabler
@@ -65,8 +66,6 @@ func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
 		LevelEnabler:   params.LevelEnabler,
 		enc:            params.Enc,
 		out:            params.Out,
-		ch:             make(chan *types.InputLogEvent, 10000),
-		flush:          make(chan bool),
 	}
 
 	err := core.cloudWatchInit()
@@ -91,8 +90,6 @@ func (c *CloudwatchCore) clone() *CloudwatchCore {
 		Options:        c.Options,
 		BatchFrequency: c.BatchFrequency,
 		LevelEnabler:   c.LevelEnabler,
-		ch:             make(chan *types.InputLogEvent, 10000),
-		flush:          make(chan bool),
 		enc:            c.enc.Clone(),
 		out:            c.out,
 	}
@@ -138,7 +135,9 @@ func (c *CloudwatchCore) Write(ent zapcore.Entry, fields []zapcore.Field) error 
 }
 
 func (c *CloudwatchCore) Sync() error {
+	c.flushWG.Add(1)
 	c.flush <- true
+	c.flushWG.Wait()
 	if c.err != nil {
 		return *c.err
 	}
@@ -172,19 +171,20 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 
 	if len(resp.LogStreams) > 0 {
 		c.nextSequenceToken = resp.LogStreams[0].UploadSequenceToken
-		return nil
-	}
+	} else {
+		_, err = c.svc.CreateLogStream(context.TODO(), &cloudwatchlogs.CreateLogStreamInput{
+			LogGroupName:  aws.String(c.GroupName),
+			LogStreamName: aws.String(c.StreamName),
+		})
 
-	_, err = c.svc.CreateLogStream(context.TODO(), &cloudwatchlogs.CreateLogStreamInput{
-		LogGroupName:  aws.String(c.GroupName),
-		LogStreamName: aws.String(c.StreamName),
-	})
-
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
 	}
 
 	// Limits: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html
+	c.ch = make(chan *types.InputLogEvent, 10000)
+	c.flush = make(chan bool)
 	if c.BatchFrequency == 0 || c.BatchFrequency < 200*time.Millisecond {
 		c.BatchFrequency = 5 * time.Second
 	}
@@ -210,7 +210,8 @@ func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Ti
 			batch = append(batch, *p)
 			size += messageSize
 		case <-flush:
-			go c.sendBatch(batch)
+			c.sendBatch(batch)
+			c.flushWG.Done()
 			batch = nil
 			size = 0
 		case <-ticker:

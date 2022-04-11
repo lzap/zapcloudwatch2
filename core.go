@@ -25,9 +25,7 @@ type CloudwatchCore struct {
 	BatchFrequency    time.Duration
 	nextSequenceToken *string
 	svc               *cloudwatchlogs.Client
-	m                 sync.Mutex
 	ch                chan *types.InputLogEvent
-	flush             chan bool
 	flushWG           sync.WaitGroup
 	err               *error
 
@@ -136,7 +134,7 @@ func (c *CloudwatchCore) Write(ent zapcore.Entry, fields []zapcore.Field) error 
 
 func (c *CloudwatchCore) Sync() error {
 	c.flushWG.Add(1)
-	c.flush <- true
+	c.ch <- nil
 	c.flushWG.Wait()
 	if c.err != nil {
 		return *c.err
@@ -183,35 +181,36 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 	}
 
 	c.ch = make(chan *types.InputLogEvent, 10000)
-	c.flush = make(chan bool)
 	if c.BatchFrequency == 0 || c.BatchFrequency < 200*time.Millisecond {
 		c.BatchFrequency = 2 * time.Second
 	}
 	ticker := time.NewTicker(c.BatchFrequency)
-	go c.processBatches(c.flush, ticker.C)
+	go c.processBatches(ticker.C)
 
 	return nil
 }
 
-func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Time) {
+func (c *CloudwatchCore) processBatches(ticker <-chan time.Time) {
 	var batch []types.InputLogEvent
 	size := 0
 	for {
 		select {
 		case p := <-c.ch:
-			messageSize := len(*p.Message) + 26
-			if size+messageSize >= 1_048_576 || len(batch) == 10000 {
+			if p != nil {
+				messageSize := len(*p.Message) + 26
+				if size+messageSize >= 1_048_576 || len(batch) == 10000 {
+					c.sendBatch(batch)
+					batch = nil
+					size = 0
+				}
+				batch = append(batch, *p)
+				size += messageSize
+			} else {
 				c.sendBatch(batch)
+				c.flushWG.Done()
 				batch = nil
 				size = 0
 			}
-			batch = append(batch, *p)
-			size += messageSize
-		case <-flush:
-			c.sendBatch(batch)
-			c.flushWG.Done()
-			batch = nil
-			size = 0
 		case <-ticker:
 			c.sendBatch(batch)
 			batch = nil

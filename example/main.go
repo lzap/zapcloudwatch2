@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io/ioutil"
 	"log"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	zcw "github.com/lzap/zapcloudwatch2"
 
 	"go.uber.org/zap"
@@ -20,13 +22,35 @@ func getConsoleCore() zapcore.Core {
 
 func getCloudwatchCore() (*zapcore.Core, error) {
 
+	// Read default config from $HOME/.aws/credentials
+	//cfg, err := config.LoadDefaultConfig(context.TODO())
+
+	// Read config section from $HOME/.aws/credentials
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile("saml"))
+	config.WithRegion("test")
+
+	// Or static configuration
+	/*
+		prov := credentials.NewStaticCredentialsProvider(
+			os.Getenv("AWS_ACCESS_KEY"),
+			os.Getenv("AWS_SECRET_KEY"),
+			os.Getenv("AWS_TOKEN"),
+		)
+
+		cfg, err := config.LoadDefaultConfig(
+			context.Background(),
+			config.WithCredentialsProvider(prov),
+		)
+	*/
+
+	if err != nil {
+		return nil, err
+	}
+
 	cloudWatchParams := zcw.NewCloudwatchCoreParams{
 		GroupName:    "test",
 		StreamName:   "stream",
-		AWSRegion:    os.Getenv("AWS_REGION"),
-		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY"),
-		AWSSecretKey: os.Getenv("AWS_SECRET_KEY"),
-		AWSToken:     os.Getenv("AWS_TOKEN"),
+		Config:       &cfg,
 		Level:        zapcore.InfoLevel,
 		LevelEnabler: zap.NewAtomicLevelAt(zapcore.InfoLevel),
 		Enc:          zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),

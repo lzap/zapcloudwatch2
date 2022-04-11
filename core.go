@@ -7,21 +7,17 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 
 	"go.uber.org/zap/zapcore"
 )
 
-// CloudwatchCore is a zap Core for dispatching messages to the specified
 type CloudwatchCore struct {
-	// Messages with a log level not contained in this array
-	// will not be dispatched. If nil, all messages will be dispatched.
 	AcceptedLevels    []zapcore.Level
 	GroupName         string
 	StreamName        string
-	Options           *cloudwatchlogs.Options
+	Config            *aws.Config
 	BatchFrequency    time.Duration
 	nextSequenceToken *string
 	svc               *cloudwatchlogs.Client
@@ -37,6 +33,7 @@ type CloudwatchCore struct {
 type NewCloudwatchCoreParams struct {
 	GroupName    string
 	StreamName   string
+	Config       *aws.Config
 	AWSRegion    string
 	AWSAccessKey string
 	AWSSecretKey string
@@ -48,18 +45,10 @@ type NewCloudwatchCoreParams struct {
 }
 
 func NewCloudwatchCore(params *NewCloudwatchCoreParams) (zapcore.Core, error) {
-	options := cloudwatchlogs.Options{
-		Region: params.AWSRegion,
-		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
-			params.AWSAccessKey,
-			params.AWSSecretKey,
-			params.AWSToken)),
-	}
-
 	core := &CloudwatchCore{
 		GroupName:      params.GroupName,
 		StreamName:     params.StreamName,
-		Options:        &options,
+		Config:         params.Config,
 		AcceptedLevels: LevelThreshold(params.Level),
 		LevelEnabler:   params.LevelEnabler,
 		enc:            params.Enc,
@@ -85,7 +74,7 @@ func (c *CloudwatchCore) clone() *CloudwatchCore {
 		AcceptedLevels: c.AcceptedLevels,
 		GroupName:      c.GroupName,
 		StreamName:     c.StreamName,
-		Options:        c.Options,
+		Config:         c.Config,
 		BatchFrequency: c.BatchFrequency,
 		LevelEnabler:   c.LevelEnabler,
 		enc:            c.enc.Clone(),
@@ -144,7 +133,7 @@ func (c *CloudwatchCore) Sync() error {
 
 // GetHook function returns hook to zap
 func (c *CloudwatchCore) cloudWatchInit() error {
-	c.svc = cloudwatchlogs.New(*c.Options)
+	c.svc = cloudwatchlogs.NewFromConfig(*c.Config)
 
 	lgresp, err := c.svc.DescribeLogGroups(context.TODO(), &cloudwatchlogs.DescribeLogGroupsInput{LogGroupNamePrefix: aws.String(c.GroupName), Limit: aws.Int32(1)})
 	if err != nil {

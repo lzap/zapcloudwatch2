@@ -182,7 +182,6 @@ func (c *CloudwatchCore) cloudWatchInit() error {
 		}
 	}
 
-	// Limits: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html
 	c.ch = make(chan *types.InputLogEvent, 10000)
 	c.flush = make(chan bool)
 	if c.BatchFrequency == 0 || c.BatchFrequency < 200*time.Millisecond {
@@ -200,10 +199,9 @@ func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Ti
 	for {
 		select {
 		case p := <-c.ch:
-			// Limits: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html
 			messageSize := len(*p.Message) + 26
 			if size+messageSize >= 1_048_576 || len(batch) == 10000 {
-				go c.sendBatch(batch)
+				c.sendBatch(batch)
 				batch = nil
 				size = 0
 			}
@@ -215,7 +213,7 @@ func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Ti
 			batch = nil
 			size = 0
 		case <-ticker:
-			go c.sendBatch(batch)
+			c.sendBatch(batch)
 			batch = nil
 			size = 0
 		}
@@ -223,9 +221,6 @@ func (c *CloudwatchCore) processBatches(flush <-chan bool, ticker <-chan time.Ti
 }
 
 func (c *CloudwatchCore) sendBatch(batch []types.InputLogEvent) {
-	c.m.Lock()
-	defer c.m.Unlock()
-
 	if len(batch) == 0 {
 		return
 	}

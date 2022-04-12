@@ -26,8 +26,7 @@ func getCloudwatchCore() (*zapcore.Core, error) {
 	//cfg, err := config.LoadDefaultConfig(context.TODO())
 
 	// Read config section from $HOME/.aws/credentials
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile("saml"))
-	config.WithRegion("test")
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile("saml"), config.WithRegion("eu-central-1"))
 
 	// Or static configuration
 	/*
@@ -40,6 +39,7 @@ func getCloudwatchCore() (*zapcore.Core, error) {
 		cfg, err := config.LoadDefaultConfig(
 			context.Background(),
 			config.WithCredentialsProvider(prov),
+			config.WithRegion(os.Getenv("AWS_REGION")),
 		)
 	*/
 
